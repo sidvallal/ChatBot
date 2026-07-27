@@ -3,7 +3,7 @@ from typing import TypedDict, Literal, Annotated
 from langchain_groq import ChatGroq
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage,HumanMessage
 from langgraph.graph.message import add_messages
 from langgraph.checkpoint.memory import InMemorySaver
 
@@ -41,4 +41,14 @@ graph.add_edge(START, 'chat_node')
 graph.add_edge('chat_node',END)
 
 chatbot = graph.compile(checkpointer=checkpointer)
+
+# CONFIG = {"configurable": {"thread_id": "thread-1"}}
+
+# chatbot.invoke(
+#         {"messages": [HumanMessage(content='my name is sid')]},
+#             config=CONFIG,
+#             stream_mode="messages",
+#         )
+
+# print(chatbot.get_state(config=CONFIG).values['messages'])
 
