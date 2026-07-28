@@ -32,6 +32,7 @@ def chat_node(state: ChatState):
 
 
 checkpointer = InMemorySaver()
+
 graph = StateGraph(ChatState)
 
 
