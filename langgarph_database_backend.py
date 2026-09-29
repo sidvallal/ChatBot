@@ -1,9 +1,8 @@
 from langgraph.graph import StateGraph, START, END
-from typing import TypedDict, Literal, Annotated
+from typing import TypedDict, Annotated
 from langchain_groq import ChatGroq
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
-from langchain_core.messages import BaseMessage,HumanMessage
+from langchain_core.messages import BaseMessage, HumanMessage
 from langgraph.graph.message import add_messages
 from langgraph.checkpoint.sqlite import SqliteSaver
 import sqlite3
@@ -11,59 +10,60 @@ import sqlite3
 load_dotenv()
 
 model = ChatGroq(
-    model="llama-3.1-8b-instant",
+    model="openai/gpt-oss-120b",
     temperature=0
 )
 
+
 class ChatState(TypedDict):
-    
-    messages : Annotated[list[BaseMessage], add_messages]
-    
+    messages: Annotated[list[BaseMessage], add_messages]
+
 
 def chat_node(state: ChatState):
-    
-    # take query from state
-    messages = state['messages']
-    
-    # send to llm
-    response = model.invoke(messages)
-    
-    # store response in state
-    return {'messages': [response]}
+    response = model.invoke(state["messages"])
+    return {"messages": [response]}
 
-conn = sqlite3.connect(database='chatbot.db', check_same_thread=False)
 
+conn = sqlite3.connect(database="chatbot.db", check_same_thread=False)
 checkpointer = SqliteSaver(conn=conn)
 
 graph = StateGraph(ChatState)
-
-
-graph.add_node('chat_node',chat_node)
-
-graph.add_edge(START, 'chat_node')
-graph.add_edge('chat_node',END)
+graph.add_node("chat_node", chat_node)
+graph.add_edge(START, "chat_node")
+graph.add_edge("chat_node", END)
 
 chatbot = graph.compile(checkpointer=checkpointer)
 
-# test
-# CONFIG = {
-#         "configurable": {
-#             "thread_id": "thrad-2"
-#         }
-#     }
 
-# res = chatbot.invoke(
-#         {
-#             "messages": [HumanMessage(content='What is my name')]},
-#              config=CONFIG,
-#         )
+# ---------------------- SIDEBAR HELPERS ----------------------
 
-# print(res)
+def make_title(text, max_len=30):
+    """Turn a message into a short sidebar title."""
+    text = " ".join(text.split())  # remove newlines / extra spaces
+    return text[:max_len] + ("..." if len(text) > max_len else "")
+
+
+def get_thread_title(thread_id):
+    """Use the first user message of a saved thread as its title."""
+    state = chatbot.get_state(config={"configurable": {"thread_id": thread_id}})
+    messages = state.values.get("messages", [])
+
+    for msg in messages:
+        if isinstance(msg, HumanMessage):
+            return make_title(msg.content)
+
+    return "New Chat"
+
 
 def retrive_all_threads():
-    all_threads = set()
+    """Return all saved threads (oldest first) with titles from the conversation."""
+    thread_ids = {}  # dict keeps insertion order, unlike set()
+
     for checkpoint in checkpointer.list(None):
-        all_threads.add(checkpoint.config['configurable']['thread_id'])
-    return [{"id": tid, "title": "New Chat"} for tid in all_threads]
+        thread_ids[checkpoint.config["configurable"]["thread_id"]] = None
 
+    # checkpointer.list gives newest first -> reverse so oldest is first
+    # (frontend uses reversed(), so the newest ends up on top)
+    ordered_ids = list(thread_ids.keys())[::-1]
 
+    return [{"id": tid, "title": get_thread_title(tid)} for tid in ordered_ids]

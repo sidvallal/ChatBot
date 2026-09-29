@@ -1,5 +1,5 @@
 import streamlit as st
-from langgarph_database_backend import chatbot, retrive_all_threads
+from langgarph_database_backend import chatbot, retrive_all_threads, make_title
 from langchain_core.messages import HumanMessage
 import uuid
 
@@ -15,28 +15,18 @@ def add_thread(thread_id):
         if thread["id"] == thread_id:
             return
 
-    st.session_state["chat_threads"].append(
-        {
-            "id": thread_id,
-            "title": "New Chat"
-        }
-    )
+    st.session_state["chat_threads"].append({"id": thread_id, "title": "New Chat"})
 
 
 def reset_chat():
     new_thread = generate_thread_id()
-
     st.session_state["thread_id"] = new_thread
     st.session_state["messages_history"] = []
-
     add_thread(new_thread)
 
 
 def load_conversation(thread_id):
-    state = chatbot.get_state(
-        config={"configurable": {"thread_id": thread_id}}
-    )
-
+    state = chatbot.get_state(config={"configurable": {"thread_id": thread_id}})
     return state.values.get("messages", [])
 
 
@@ -66,29 +56,27 @@ st.sidebar.header("My Conversations")
 # Latest chats on top
 for thread in reversed(st.session_state["chat_threads"]):
 
-    if st.sidebar.button(thread["title"], key=thread["id"]):
+    # Highlight the currently open chat
+    is_active = thread["id"] == st.session_state["thread_id"]
+    button_type = "primary" if is_active else "secondary"
 
+    if st.sidebar.button(
+        thread["title"],
+        key=thread["id"],
+        type=button_type,
+        use_container_width=True,
+    ):
         st.session_state["thread_id"] = thread["id"]
 
         messages = load_conversation(thread["id"])
 
-        temp_messages = []
-
-        for msg in messages:
-
-            if isinstance(msg, HumanMessage):
-                role = "user"
-            else:
-                role = "assistant"
-
-            temp_messages.append(
-                {
-                    "role": role,
-                    "content": msg.content
-                }
-            )
-
-        st.session_state["messages_history"] = temp_messages
+        st.session_state["messages_history"] = [
+            {
+                "role": "user" if isinstance(msg, HumanMessage) else "assistant",
+                "content": msg.content,
+            }
+            for msg in messages
+        ]
 
         st.rerun()
 
@@ -104,50 +92,37 @@ user_input = st.chat_input("Type your message...")
 
 if user_input:
 
-    # Update sidebar title using first message
+    # Set sidebar title from the first message of this chat
     for thread in st.session_state["chat_threads"]:
         if (
             thread["id"] == st.session_state["thread_id"]
             and thread["title"] == "New Chat"
         ):
-            thread["title"] = user_input[:30]
+            thread["title"] = make_title(user_input)
             break
 
     st.session_state["messages_history"].append(
-        {
-            "role": "user",
-            "content": user_input,
-        }
+        {"role": "user", "content": user_input}
     )
 
     with st.chat_message("user"):
         st.write(user_input)
 
-    CONFIG = {
-        "configurable": {
-            "thread_id": st.session_state["thread_id"]
-        }
-    }
+    CONFIG = {"configurable": {"thread_id": st.session_state["thread_id"]}}
 
     with st.chat_message("assistant"):
-
         ai_message = st.write_stream(
-            (
-                chunk.content
-                for chunk, metadata in chatbot.stream(
-                    {"messages": [HumanMessage(content=user_input)]},
-                    config=CONFIG,
-                    stream_mode="messages",
-                )
-                if chunk.content
+            chunk.content
+            for chunk, metadata in chatbot.stream(
+                {"messages": [HumanMessage(content=user_input)]},
+                config=CONFIG,
+                stream_mode="messages",
             )
+            if chunk.content
         )
 
     st.session_state["messages_history"].append(
-        {
-            "role": "assistant",
-            "content": ai_message,
-        }
+        {"role": "assistant", "content": ai_message}
     )
 
     st.rerun()
