@@ -1,4 +1,8 @@
+"""MCP tool server (stdio) for the LangGraph chatbot."""
+
 import os
+from typing import Literal
+
 import requests
 from dotenv import load_dotenv
 from fastmcp import FastMCP
@@ -14,9 +18,11 @@ _ddg = DuckDuckGoSearchRun()
 def calculator(
     op1: float,
     op2: float,
-    operation: str,
+    operation: Literal["add", "subtract", "multiply", "divide"],
 ) -> float | str:
     """Perform basic arithmetic: add, subtract, multiply, or divide."""
+
+    operation = operation.lower().strip()
 
     if operation == "add":
         return op1 + op2
@@ -54,7 +60,7 @@ def get_stock_price(symbol: str) -> dict:
             "https://www.alphavantage.co/query",
             params={
                 "function": "GLOBAL_QUOTE",
-                "symbol": symbol,
+                "symbol": symbol.strip().upper(),
                 "apikey": api_key,
             },
             timeout=10,
@@ -83,8 +89,18 @@ def convert_currency(
 ) -> dict:
     """Convert currency using the latest available exchange rate."""
 
-    source = from_currency.upper()
-    target = to_currency.upper()
+    source = from_currency.strip().upper()
+    target = to_currency.strip().upper()
+
+    if source == target:
+        return {
+            "amount": amount,
+            "from": source,
+            "to": target,
+            "rate": 1.0,
+            "converted": round(amount, 2),
+            "rate_date": None,
+        }
 
     try:
         response = requests.get(

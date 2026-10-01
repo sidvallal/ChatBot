@@ -1,4 +1,4 @@
-"""Streamlit frontend for the LangGraph chatbot."""
+"""Streamlit frontend for the LangGraph MCP chatbot."""
 
 import uuid
 
@@ -12,38 +12,84 @@ from backend import (
     stream_reply,
 )
 
+# ---------------------- CONFIGURATION ----------------------
+
+st.set_page_config(
+    page_title="LangGraph Chatbot",
+    page_icon="🤖",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
 NEW_CHAT_TITLE = "New Chat"
+
 
 # ---------------------- UTILITY FUNCTIONS ----------------------
 
-
 def generate_thread_id() -> str:
+    """Generate a unique ID for a conversation."""
     return str(uuid.uuid4())
 
 
 def add_thread(thread_id: str) -> None:
-    """Add a thread to the sidebar list if it isn't there already."""
-    if any(t["id"] == thread_id for t in st.session_state["chat_threads"]):
-        return
-    st.session_state["chat_threads"].append({"id": thread_id, "title": NEW_CHAT_TITLE})
+    """Add a thread to the session list if it does not exist."""
+    if not any(
+        thread["id"] == thread_id
+        for thread in st.session_state["chat_threads"]
+    ):
+        st.session_state["chat_threads"].append(
+            {"id": thread_id, "title": NEW_CHAT_TITLE}
+        )
+
+
+def get_current_thread_title() -> str:
+    """Get the active conversation title."""
+    thread_id = st.session_state["thread_id"]
+
+    for thread in st.session_state["chat_threads"]:
+        if thread["id"] == thread_id:
+            return thread["title"]
+
+    return NEW_CHAT_TITLE
 
 
 def reset_chat() -> None:
+    """Create a new conversation (reusing the current one if it is empty)."""
+    st.session_state["last_error"] = None
+
+    if (
+        not st.session_state["messages_history"]
+        and get_current_thread_title() == NEW_CHAT_TITLE
+    ):
+        return
+
     thread_id = generate_thread_id()
+
     st.session_state["thread_id"] = thread_id
     st.session_state["messages_history"] = []
+
     add_thread(thread_id)
 
 
 def open_thread(thread_id: str) -> None:
+    """Load an existing conversation."""
     st.session_state["thread_id"] = thread_id
-    st.session_state["messages_history"] = load_conversation(thread_id)
+    st.session_state["last_error"] = None
+
+    try:
+        st.session_state["messages_history"] = load_conversation(thread_id)
+    except Exception as e:
+        st.session_state["messages_history"] = []
+        st.session_state["last_error"] = f"Unable to load conversation: {e}"
 
 
 # ---------------------- SESSION SETUP ----------------------
 
 if "messages_history" not in st.session_state:
     st.session_state["messages_history"] = []
+
+if "last_error" not in st.session_state:
+    st.session_state["last_error"] = None
 
 if "chat_threads" not in st.session_state:
     st.session_state["chat_threads"] = retrieve_all_threads()
@@ -53,62 +99,97 @@ if "thread_id" not in st.session_state:
 
 add_thread(st.session_state["thread_id"])
 
+
 # ---------------------- SIDEBAR ----------------------
 
-st.sidebar.title("LangGraph ChatBot")
+with st.sidebar:
+    st.title("🤖 LangGraph Chatbot")
+    st.caption("Powered by LangGraph, MCP, and Groq")
 
-if st.sidebar.button("New Chat"):
-    reset_chat()
-    st.rerun()
+    st.divider()
 
-st.sidebar.header("My Conversations")
-
-# Latest chats on top
-for thread in reversed(st.session_state["chat_threads"]):
-    is_active = thread["id"] == st.session_state["thread_id"]
-
-    if st.sidebar.button(
-        thread["title"],
-        key=thread["id"],
-        type="primary" if is_active else "secondary",
+    if st.button(
+        "➕ New Chat",
         use_container_width=True,
+        type="primary",
     ):
-        open_thread(thread["id"])
+        reset_chat()
         st.rerun()
 
-# ---------------------- CHAT WINDOW ----------------------
+    st.divider()
 
+    st.subheader("💬 My Conversations")
+
+    if not st.session_state["chat_threads"]:
+        st.caption("No conversations yet.")
+
+    # Display newest conversations first.
+    for thread in reversed(st.session_state["chat_threads"]):
+        is_active = thread["id"] == st.session_state["thread_id"]
+
+        if st.button(
+            thread["title"],
+            key=f"thread_{thread['id']}",
+            use_container_width=True,
+            type="primary" if is_active else "secondary",
+        ):
+            if not is_active:
+                open_thread(thread["id"])
+                st.rerun()
+
+
+# ---------------------- MAIN CHAT WINDOW ----------------------
+
+st.title("LangGraph Chatbot")
+st.caption("Ask questions, perform calculations, search the web, and more.")
+
+# Display conversation history.
 for message in st.session_state["messages_history"]:
     with st.chat_message(message["role"]):
-        st.write(message["content"])
+        st.markdown(message["content"])
+
+# Show the error from the previous turn (it survives the rerun).
+if st.session_state["last_error"]:
+    st.error(st.session_state["last_error"])
+
+
+# ---------------------- HANDLE USER INPUT ----------------------
 
 user_input = st.chat_input("Type your message...")
 
-# ---------------------- HANDLE USER MESSAGE ----------------------
-
 if user_input:
     thread_id = st.session_state["thread_id"]
+    st.session_state["last_error"] = None
 
-    # First message of a chat sets (and saves) its sidebar title
+    # Update the title when the first message is sent.
     for thread in st.session_state["chat_threads"]:
         if thread["id"] == thread_id and thread["title"] == NEW_CHAT_TITLE:
-            thread["title"] = make_title(user_input)
-            save_thread_title(thread_id, thread["title"])
+            title = make_title(user_input)
+            thread["title"] = title
+            save_thread_title(thread_id, title)
             break
 
-    st.session_state["messages_history"].append({"role": "user", "content": user_input})
-    with st.chat_message("user"):
-        st.write(user_input)
+    # Add and display the user's message.
+    st.session_state["messages_history"].append(
+        {"role": "user", "content": user_input}
+    )
 
+    with st.chat_message("user"):
+        st.markdown(user_input)
+
+    # Generate and stream the assistant's response.
     with st.chat_message("assistant"):
         try:
             ai_message = st.write_stream(stream_reply(thread_id, user_input))
+
+            st.session_state["messages_history"].append(
+                {"role": "assistant", "content": ai_message}
+            )
+
         except Exception as e:
-            ai_message = f"Sorry, something went wrong: {e}"
-            st.error(ai_message)
+            # The user message stays visible (it is also in the checkpoint),
+            # and the error is shown after the rerun below.
+            st.session_state["last_error"] = f"Something went wrong: {e}"
 
-    st.session_state["messages_history"].append(
-        {"role": "assistant", "content": ai_message}
-    )
-
-    st.rerun()  # refresh the sidebar title
+    # Refresh the sidebar (new title) and chat display.
+    st.rerun()
