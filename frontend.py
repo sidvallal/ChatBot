@@ -1,10 +1,11 @@
-"""Streamlit frontend for the LangGraph MCP chatbot."""
+"""Streamlit frontend for the LangGraph MCP chatbot with document RAG."""
 
 import uuid
 
 import streamlit as st
 
 from backend import (
+    index_uploaded_file,
     load_conversation,
     make_title,
     retrieve_all_threads,
@@ -54,7 +55,7 @@ def get_current_thread_title() -> str:
 
 
 def reset_chat() -> None:
-    """Create a new conversation (reusing the current one if it is empty)."""
+    """Create a new conversation unless the current one is still empty."""
     st.session_state["last_error"] = None
 
     if (
@@ -64,7 +65,6 @@ def reset_chat() -> None:
         return
 
     thread_id = generate_thread_id()
-
     st.session_state["thread_id"] = thread_id
     st.session_state["messages_history"] = []
 
@@ -78,9 +78,11 @@ def open_thread(thread_id: str) -> None:
 
     try:
         st.session_state["messages_history"] = load_conversation(thread_id)
-    except Exception as e:
+    except Exception as exc:
         st.session_state["messages_history"] = []
-        st.session_state["last_error"] = f"Unable to load conversation: {e}"
+        st.session_state["last_error"] = (
+            f"Unable to load conversation: {exc}"
+        )
 
 
 # ---------------------- SESSION SETUP ----------------------
@@ -104,7 +106,7 @@ add_thread(st.session_state["thread_id"])
 
 with st.sidebar:
     st.title("🤖 LangGraph Chatbot")
-    st.caption("Powered by LangGraph, MCP, and Groq")
+    st.caption("Powered by LangGraph, MCP, Groq, and Gemini")
 
     st.divider()
 
@@ -118,12 +120,52 @@ with st.sidebar:
 
     st.divider()
 
+    # Document upload and indexing.
+    st.subheader("📄 Upload a Document")
+
+    uploaded_file = st.file_uploader(
+        "Choose a PDF, TXT, or DOCX file",
+        type=["pdf", "txt", "docx"],
+        key="document_uploader",
+    )
+
+    if uploaded_file is not None:
+        st.caption(f"Selected: {uploaded_file.name}")
+
+        if st.button(
+            "📥 Index Document",
+            use_container_width=True,
+            key="index_document",
+        ):
+            try:
+                with st.spinner(
+                    "Extracting text and creating Gemini embeddings..."
+                ):
+                    chunk_count = index_uploaded_file(
+                        st.session_state["thread_id"],
+                        uploaded_file,
+                    )
+
+                st.success(
+                    f"Document indexed successfully! "
+                    f"{chunk_count} chunks created."
+                )
+
+            except Exception as exc:
+                st.error(f"Unable to index document: {exc}")
+
+    st.caption(
+        "Documents are indexed for the currently selected conversation."
+    )
+
+    st.divider()
+
+    # Conversation list.
     st.subheader("💬 My Conversations")
 
     if not st.session_state["chat_threads"]:
         st.caption("No conversations yet.")
 
-    # Display newest conversations first.
     for thread in reversed(st.session_state["chat_threads"]):
         is_active = thread["id"] == st.session_state["thread_id"]
 
@@ -141,14 +183,17 @@ with st.sidebar:
 # ---------------------- MAIN CHAT WINDOW ----------------------
 
 st.title("LangGraph Chatbot")
-st.caption("Ask questions, perform calculations, search the web, and more.")
+st.caption(
+    "Ask questions, perform calculations, search the web, "
+    "and ask questions about your uploaded documents."
+)
 
 # Display conversation history.
 for message in st.session_state["messages_history"]:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# Show the error from the previous turn (it survives the rerun).
+# Display errors from previous operations.
 if st.session_state["last_error"]:
     st.error(st.session_state["last_error"])
 
@@ -161,12 +206,19 @@ if user_input:
     thread_id = st.session_state["thread_id"]
     st.session_state["last_error"] = None
 
-    # Update the title when the first message is sent.
+    # Give the conversation a title when its first message is sent.
     for thread in st.session_state["chat_threads"]:
-        if thread["id"] == thread_id and thread["title"] == NEW_CHAT_TITLE:
-            title = make_title(user_input)
-            thread["title"] = title
-            save_thread_title(thread_id, title)
+        if (
+            thread["id"] == thread_id
+            and thread["title"] == NEW_CHAT_TITLE
+        ):
+            try:
+                title = make_title(user_input)
+                thread["title"] = title
+                save_thread_title(thread_id, title)
+            except Exception:
+                # Chat generation should still proceed if title generation fails.
+                pass
             break
 
     # Add and display the user's message.
@@ -177,19 +229,21 @@ if user_input:
     with st.chat_message("user"):
         st.markdown(user_input)
 
-    # Generate and stream the assistant's response.
+    # Generate and stream the assistant response.
     with st.chat_message("assistant"):
         try:
-            ai_message = st.write_stream(stream_reply(thread_id, user_input))
+            ai_message = st.write_stream(
+                stream_reply(thread_id, user_input)
+            )
 
             st.session_state["messages_history"].append(
                 {"role": "assistant", "content": ai_message}
             )
 
-        except Exception as e:
-            # The user message stays visible (it is also in the checkpoint),
-            # and the error is shown after the rerun below.
-            st.session_state["last_error"] = f"Something went wrong: {e}"
+        except Exception as exc:
+            st.session_state["last_error"] = (
+                f"Something went wrong: {exc}"
+            )
 
-    # Refresh the sidebar (new title) and chat display.
+    # Refresh titles and conversation history.
     st.rerun()
